@@ -1,0 +1,256 @@
+---
+title: 'Forecasting of Motor Vehicles Sales '
+author: "Nathaniel Hurwitz, Masha Prokhorenko, Catherine Razeto"
+date: "11/25/2019"
+output:
+  html_document:
+    df_print: paged
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Packages
+```{r}
+devtools::install_github("jcizel/FredR")
+library(FredR)
+library(dplyr)
+```
+
+## API
+```{r}
+api.key = '6418acf7129e86ab2927b7819bcd1c70'
+fred <- FredR(api.key)
+```
+
+## Automate data collection
+```{r}
+create_dataframe <- function(series_id_name){
+  dt <- fred$series.observations(series_id = series_id_name)
+  dt %>%
+    select(
+      date,
+      value
+    ) %>%
+    mutate(
+      date = as.Date(date),
+      value = as.numeric(value)
+    ) -> df
+
+ df
+}
+```
+
+## Automate date adjustement
+```{r}
+select_dates = function(dataframe_name){
+  dataframe_name %>%
+    filter(date > "1991-12-01") %>%
+    filter(date < "2019-09-01")-> dataframe_name
+  return(dataframe_name)
+  
+}
+```
+
+## Get the data, adjust dates, and convert to timeseries
+```{r}
+used_car_sales = create_dataframe("MRTSSM44112USN")
+used_car_sales=select_dates(used_car_sales)
+used_car_sales.ts<-ts(used_car_sales$value,start=c(1992,1),end=c(2019,8),freq=12)
+
+pub_transp = create_dataframe("CUUR0000SETG")
+pub_transp = select_dates(pub_transp)
+pub_transp.ts<-ts(pub_transp$value,start=c(1992,1),end=c(2019,8),freq=12)
+
+steel = create_dataframe("WPU10")
+steel = select_dates(steel)
+steel.ts<-ts(steel$value,start=c(1992,1),end=c(2019,8),freq=12)
+
+new_car_sales = create_dataframe("LAUTONSA")
+new_car_sales = select_dates(new_car_sales)
+new_car_sales.ts<-ts(new_car_sales$value,start=c(1992,1),end=c(2019,8),freq=12)
+```
+
+## Dimention
+```{r}
+length(used_car_sales.ts)
+```
+
+
+## Scatterplot
+```{r}
+pairs(cbind(UsedCarSales=used_car_sales.ts, PubTrans = pub_transp.ts, Steel = steel.ts, NewCarSales = new_car_sales.ts),lower.panel=NULL )
+```
+
+## Plot each variable
+```{r}
+plot(used_car_sales.ts)
+plot(pub_transp.ts)
+plot(steel.ts)
+plot(new_car_sales.ts)
+```
+
+# Exploratory Data Analysis
+
+## Used Car Sales
+Upward trend, with a small dip around 2008
+ACF - strong dependence structure up to and possibly beyond lag 25, strong indication of seasonality
+PACF - shows less significant autocorrelation and there is little indication of seasonality with strong lag 13
+Smoothing Splines seem to show upward trend and seasonality the best. 
+```{r}
+plot(used_car_sales.ts)
+acf(used_car_sales$value)
+pacf(used_car_sales$value)
+
+#moving average
+mov_ave = stats::filter(used_car_sales.ts, sides = 2, filter =rep(1/12,12))
+mov_ave2 = stats::filter(used_car_sales.ts, sides = 2, filter =rep(1/5,5))
+plot(used_car_sales.ts, main="Moving Average")
+lines(mov_ave, lwd=2, lty=2,col=2)
+lines(mov_ave2, lwd=2, col=4)
+
+#kernel smoothing
+plot(used_car_sales.ts,main="Kernel Smoothing")
+lines(ksmooth(time(used_car_sales.ts), used_car_sales.ts, "normal", bandwidth=2), lwd=2, lty=2,col=2)
+lines(ksmooth(time(used_car_sales.ts), used_car_sales.ts, "normal", bandwidth=5/12), lwd=2, col=4)
+
+#Lowess
+plot(used_car_sales.ts, main="Lowess")
+lines(lowess(used_car_sales.ts, f=.05), lwd=2, col=4)
+lines(lowess(used_car_sales.ts), lwd=2, lty=2,col=2)
+
+#Smoothing splines
+plot(used_car_sales.ts, main="Smoothing Splines")
+lines(smooth.spline(used_car_sales.ts, spar=0.2), lwd=2, col=4)
+lines(smooth.spline(used_car_sales.ts, spar=1), lty=2,  lwd=2, col=2)
+```
+
+## Public Transportation
+Upward trend 1992 - 2013, downward trend 2014-2019
+ACF - strong dependence structure up to and possibly beyond lag 25, but no clear indication of seasonality
+PACF - shows that most partial ACF's are insignificant
+Kernel smoothing does a good job showing a downward trend between 2014-2019
+```{r}
+plot(pub_transp.ts)
+acf(pub_transp$value)
+pacf(pub_transp$value)
+
+#moving average
+mov_ave = stats::filter(pub_transp.ts, sides = 2, filter =rep(1/12,12))
+mov_ave2 = stats::filter(pub_transp.ts, sides = 2, filter =rep(1/5,5))
+plot(pub_transp.ts, main="Moving Average")
+lines(mov_ave, lwd=2, lty=2,col=2)
+lines(mov_ave2, lwd=2, col=4)
+
+#kernel smoothing
+plot(pub_transp.ts,main="Kernel Smoothing")
+lines(ksmooth(time(pub_transp.ts), pub_transp.ts, "normal", bandwidth=2), lwd=2, lty=2,col=2)
+lines(ksmooth(time(pub_transp.ts), pub_transp.ts, "normal", bandwidth=5/12), lwd=2, col=4)
+
+#Lowess
+plot(pub_transp.ts, main="Lowess")
+lines(lowess(pub_transp.ts, f=.05), lwd=2, col=4)
+lines(lowess(pub_transp.ts), lwd=2, lty=2,col=2)
+
+#Smoothing splines
+plot(pub_transp.ts, main="Smoothing Splines")
+lines(smooth.spline(pub_transp.ts, spar=0.5), lwd=2, col=4)
+lines(smooth.spline(pub_transp.ts, spar=1), lty=2,  lwd=2, col=2)
+```
+
+## Steel
+Upward trend 1992 - 2013, downward trend 2014-2019
+ACF - - strong dependence structure up to and possibly beyond lag 25, but no clear indication of seasonality
+PACF - shows that most partial ACF's are insignificant
+Kernel smoothing reveals a general upward trend, but kernel smoothing shows a more of a stochastic trend, none of the smoothers seem to show any signs of seasonality
+```{r}
+plot(steel.ts)
+acf(steel$value)
+pacf(steel$value)
+
+#moving average
+mov_ave = stats::filter(steel.ts, sides = 2, filter =rep(1/12,12))
+mov_ave2 = stats::filter(steel.ts, sides = 2, filter =rep(1/5,5))
+plot(steel.ts, main="Moving Average")
+lines(mov_ave, lwd=2, lty=2,col=2)
+lines(mov_ave2, lwd=2, col=4)
+
+#kernel smoothing
+plot(steel.ts,main="Kernel Smoothing")
+lines(ksmooth(time(steel.ts), steel.ts, "normal", bandwidth=2), lwd=2, lty=2,col=2)
+lines(ksmooth(time(steel.ts), steel.ts, "normal", bandwidth=5/12), lwd=2, col=4)
+
+#Lowess
+plot(steel.ts, main="Lowess")
+lines(lowess(steel.ts, f=.05), lwd=2, col=4)
+lines(lowess(steel.ts), lwd=2, lty=2,col=2)
+
+#Smoothing splines
+plot(steel.ts, main="Smoothing Splines")
+lines(smooth.spline(steel.ts, spar=0.5), lwd=2, col=4)
+lines(smooth.spline(steel.ts, spar=1), lty=2,  lwd=2, col=2)
+```
+
+## New Car Sales
+Upward trend 1992 - 2013, downward trend 2014-2019
+ACF - strong dependence structure up to and possibly beyond lag 25,  but no clear indication of seasonality
+PACF - shows that most partial ACF's are insignificant
+Lowess indicated a general downward trend; kernel and lowess smoothers indicate some syclical patterns
+```{r}
+plot(new_car_sales.ts)
+acf(steel$value)
+pacf(steel$value)
+
+#moving average
+mov_ave = stats::filter(new_car_sales.ts, sides = 2, filter =rep(1/12,12))
+mov_ave2 = stats::filter(new_car_sales.ts, sides = 2, filter =rep(1/5,5))
+plot(new_car_sales.ts, main="Moving Average")
+lines(mov_ave, lwd=2, lty=2,col=2)
+lines(mov_ave2, lwd=2, col=4)
+
+#kernel smoothing
+plot(new_car_sales.ts,main="Kernel Smoothing")
+lines(ksmooth(time(new_car_sales.ts), new_car_sales.ts, "normal", bandwidth=2), lwd=2, lty=2,col=2)
+lines(ksmooth(time(new_car_sales.ts), new_car_sales.ts, "normal", bandwidth=5/12), lwd=2, col=4)
+
+#Lowess
+plot(new_car_sales.ts, main="Lowess")
+lines(lowess(new_car_sales.ts, f=.05), lwd=2, col=4)
+lines(lowess(new_car_sales.ts), lwd=2, lty=2,col=2)
+
+#Smoothing splines
+plot(new_car_sales.ts, main="Smoothing Splines")
+lines(smooth.spline(new_car_sales.ts, spar=0.5), lwd=2, col=4)
+lines(smooth.spline(new_car_sales.ts, spar=1), lty=2,  lwd=2, col=2)
+```
+
+
+
+# Decomposition
+
+## Used Cars Sales
+```{r}
+plot(decompose(used_car_sales.ts))
+plot(decompose(used_car_sales.ts, type="mult"))
+```
+
+## Public Transportation
+```{r}
+plot(decompose(pub_transp.ts))
+plot(decompose(pub_transp.ts, type="mult"))
+```
+
+## Steel
+```{r}
+plot(decompose(steel.ts))
+plot(decompose(steel.ts, type="mult"))
+```
+
+## New Car Sales
+```{r}
+plot(decompose(new_car_sales.ts))
+plot(decompose(new_car_sales.ts, type="mult"))
+```
