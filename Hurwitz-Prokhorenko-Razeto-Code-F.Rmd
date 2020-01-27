@@ -1,0 +1,855 @@
+---
+title: "Forecasting Used Auto Sales in the United States"
+author: "Nathaniel Hurwitz, Masha Prokhorenko, Catherine Razeto"
+date: "12/4/2019"
+output: pdf_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Packages
+```{r}
+devtools::install_github("jcizel/FredR")
+library(FredR)
+library(dplyr)
+library(tseries)
+library(lmtest)
+```
+
+## API
+```{r}
+api.key = '6418acf7129e86ab2927b7819bcd1c70'
+fred <- FredR(api.key)
+```
+
+## Automate data collection
+```{r}
+create_dataframe <- function(series_id_name){
+  dt <- fred$series.observations(series_id = series_id_name)
+  dt %>%
+    select(
+      date,
+      value
+    ) %>%
+    mutate(
+      date = as.Date(date),
+      value = as.numeric(value)
+    ) -> df
+
+ df
+}
+```
+
+## Automate date adjustement
+```{r}
+select_dates = function(dataframe_name){
+  dataframe_name %>%
+    filter(date > "1991-12-01") %>%
+    filter(date < "2019-10-01")-> dataframe_name
+  return(dataframe_name)
+  
+}
+```
+
+## Get the data, adjust dates, and convert to timeseries
+```{r}
+used_car_sales = create_dataframe("MRTSSM44112USN")
+used_car_sales=select_dates(used_car_sales)
+used_car_sales.ts<-ts(used_car_sales$value,start=c(1992,1),end=c(2019,9),freq=12)
+
+pub_transp = create_dataframe("CUUR0000SETG")
+pub_transp = select_dates(pub_transp)
+pub_transp.ts<-ts(pub_transp$value,start=c(1992,1),end=c(2019,9),freq=12)
+
+steel = create_dataframe("WPU10")
+steel = select_dates(steel)
+steel.ts<-ts(steel$value,start=c(1992,1),end=c(2019,9),freq=12)
+
+new_car_sales = create_dataframe("LAUTONSA")
+new_car_sales = select_dates(new_car_sales)
+new_car_sales.ts<-ts(new_car_sales$value,start=c(1992,1),end=c(2019,9),freq=12)
+```
+
+## Dimention
+```{r}
+length(used_car_sales.ts)
+```
+
+## Plot each variable
+```{r}
+plot(used_car_sales.ts, main="Used Motor Vehicle Sales in the U.S ", ylab="Thousands of Dollars")
+plot(pub_transp.ts, main = " Public transportation in U.S. urban areas", ylab= "Consumer Prince Index")
+plot(steel.ts, main = 'Metal and Metal Products', ylab = "Producer Price Index")
+plot(new_car_sales.ts, main = 'New Motor Vehicle Retail Sales (Domestic and Foreign)', ylab ="Thousands of Units")
+```
+
+## Split each time seariet into test and train datasets
+```{r}
+train =1:321
+ucs_train = ts(used_car_sales.ts[train],start=c(1992,1),end=c(2018,9),freq=12)
+ucs_test = ts(used_car_sales.ts[-train],start=c(2018,10),end=c(2019,9),freq=12)
+
+pt_train = ts(pub_transp.ts[train],start=c(1992,1),end=c(2018,9),freq=12)
+pt_test = ts(pub_transp.ts[-train],start=c(2018,10),end=c(2019,9),freq=12)
+
+steel_train = ts(steel.ts[train],start=c(1992,1),end=c(2018,9),freq=12)
+steel_test = ts(steel.ts[-train],start=c(2018,10),end=c(2019,9),freq=12)
+
+ncs_train = ts(new_car_sales.ts[train],start=c(1992,1),end=c(2018,9),freq=12)
+ncs_test = ts(new_car_sales.ts[-train],start=c(2018,10),end=c(2019,9),freq=12)
+```
+
+# Exploratory Data Analysis
+
+## Used Car Sales
+Upward trend, with a small dip around 2008
+<br />
+ACF - strong dependence structure up to and possibly beyond lag 25, some seasonality present
+<br />
+PACF - shows less significant autocorrelation and there is little indication of seasonality with strong lag 12
+<br />
+Smoothing Splines seem to show upward trend and seasonality the best. 
+```{r}
+
+png('ucs_plot.png')
+plot(ucs_train, main ='Used Motor Vehicle Sales in the U.S',  ylab="Thousands of Dollars")
+dev.off()
+png('ucs_acf.png')
+acf_ucs = acf(ucs_train, main ='Used Motor Vehicle Sales in the U.S')
+plot(acf_ucs)
+dev.off()
+png('ucs_pacf.png')
+pacf_ucs = pacf(ucs_train, main = '')
+plot(pacf_ucs)
+dev.off()
+
+#moving average
+png('ucs_mov_ave.png')
+mov_ave_used_cars = stats::filter(ucs_train, sides = 2, filter =rep(1/12,12))
+mov_ave2_used_cars = stats::filter(ucs_train, sides = 2, filter =rep(1/5,5))
+plot(ucs_train, main="Moving Average", ylab ='Used Motor Vehicle Sales (Thousands of Dollars)')
+lines(mov_ave_used_cars, lwd=2, lty=2,col=2)
+lines(mov_ave2_used_cars, lwd=2, col=4)
+dev.off()
+
+#kernel smoothing
+png('ucs_ksmooth.png')
+plot(ucs_train,main="Kernel Smoothing", ylab ='Used Motor Vehicle Sales (Thousands of Dollars)')
+lines(ksmooth(time(ucs_train), ucs_train, "normal", bandwidth=2), lwd=2, lty=2,col=2)
+lines(ksmooth(time(ucs_train), ucs_train, "normal", bandwidth=5/12), lwd=2, col=4)
+dev.off()
+
+#Lowess
+png('ucs_lowess.png')
+plot(ucs_train, main="Lowess", ylab ='Used Motor Vehicle Sales (Thousands of Dollars)')
+lines(lowess(ucs_train, f=.05), lwd=2, col=4)
+lines(lowess(ucs_train), lwd=2, lty=2,col=2)
+dev.off()
+
+#Smoothing splines
+png('ucs_smooth_spline.png')
+plot(ucs_train, main="Smoothing Splines", ylab ='Used Motor Vehicle Sales (Thousands of Dollars)')
+lines(smooth.spline(ucs_train, spar=0.2), lwd=2, col=4)
+lines(smooth.spline(ucs_train, spar=1), lty=2,  lwd=2, col=2)
+dev.off()
+```
+
+## Public Transportation
+Upward trend 1992 - 2013, downward trend 2014-2019
+<br />
+ACF - strong dependence structure up to and possibly beyond lag 25, but no clear indication of seasonality
+<br />
+PACF - shows that most partial ACF's are insignificant
+<br />
+Kernel smoothing does a good job showing a downward trend between 2014-2019
+```{r}
+png('pt_plot.png')
+plot(pt_train)
+dev.off()
+png('pt_acf.png')
+pt_acf = acf(pt_train)
+plot(pt_acf, main = '')
+dev.off()
+png('pt_pacf.png')
+pt_pacf = pacf(pt_train)
+plot(pt_pacf, main = '')
+dev.off()
+
+#moving average
+png('pt_mov_ave.png')
+mov_ave = stats::filter(pt_train, sides = 2, filter =rep(1/12,12))
+mov_ave2 = stats::filter(pt_train, sides = 2, filter =rep(1/5,5))
+plot(pt_train, main="Moving Average", ylab= "Public transportation in U.S. urban areas CPI")
+lines(mov_ave, lwd=2, lty=2,col=2)
+lines(mov_ave2, lwd=2, col=4)
+dev.off()
+
+#kernel smoothing
+png('pt_ksmooth.png')
+plot(pt_train,main="Kernel Smoothing", ylab= "Public transportation in U.S. urban areas CPI")
+lines(ksmooth(time(pt_train), pt_train, "normal", bandwidth=2), lwd=2, lty=2,col=2)
+lines(ksmooth(time(pt_train), pt_train, "normal", bandwidth=5/12), lwd=2, col=4)
+dev.off()
+
+#Lowess
+png('pt_lowess.png')
+plot(pt_train, main="Lowess", ylab= "Public transportation in U.S. urban areas CPI")
+lines(lowess(pt_train, f=.05), lwd=2, col=4)
+lines(lowess(pt_train), lwd=2, lty=2,col=2)
+dev.off()
+
+#Smoothing splines
+png('pt_smooth_spline.png')
+plot(pt_train, main="Smoothing Splines", ylab= "Public transportation in U.S. urban areas CPI")
+lines(smooth.spline(pt_train, spar=0.5), lwd=2, col=4)
+lines(smooth.spline(pt_train, spar=1), lty=2,  lwd=2, col=2)
+dev.off()
+```
+
+## Steel
+Upward trend 1992 - 2013, downward trend 2014-2019
+<br />
+ACF - - strong dependence structure up to and possibly beyond lag 25, but no clear indication of seasonality
+<br />
+PACF - shows that most partial ACF's are insignificant
+<br />
+Kernel smoothing reveals a general upward trend, but kernel smoothing shows a more of a stochastic trend, none of the smoothers seem to show any signs of seasonality
+```{r}
+png('steel_plot.png')
+plot(steel_train)
+dev.off()
+png('steel_acf.png')
+steel_acf = acf(steel_train)
+plot(steel_acf, main = '')
+dev.off()
+png('steel_pacf.png')
+steel_pacf = pacf(steel_train)
+plot(steel_pacf, main = '')
+dev.off()
+
+ 
+
+#moving average
+png('steel_mov_ave.png')
+mov_ave = stats::filter(steel_train, sides = 2, filter =rep(1/12,12))
+mov_ave2 = stats::filter(steel_train, sides = 2, filter =rep(1/5,5))
+plot(steel_train, main="Moving Average", ylab = " Metal and Metal Products PPI")
+lines(mov_ave, lwd=2, lty=2,col=2)
+lines(mov_ave2, lwd=2, col=4)
+dev.off()
+
+#kernel smoothing
+png('steel_ksmooth.png')
+plot(steel_train,main="Kernel Smoothing", ylab = " Metal and Metal Products PPI")
+lines(ksmooth(time(steel_train), steel_train, "normal", bandwidth=2), lwd=2, lty=2,col=2)
+lines(ksmooth(time(steel_train), steel_train, "normal", bandwidth=5/12), lwd=2, col=4)
+dev.off()
+
+#Lowess
+png('steel_lowess.png')
+plot(steel_train, main="Lowess", ylab = " Metal and Metal Products PPI")
+lines(lowess(steel_train, f=.05), lwd=2, col=4)
+lines(lowess(steel_train), lwd=2, lty=2,col=2)
+dev.off()
+
+#Smoothing splines
+png('steel_smooth_spline.png')
+plot(steel_train, main="Smoothing Splines", ylab = " Metal and Metal Products PPI")
+lines(smooth.spline(steel_train, spar=0.5), lwd=2, col=4)
+lines(smooth.spline(steel_train, spar=1), lty=2,  lwd=2, col=2)
+dev.off()
+```
+
+## New Car Sales
+Upward trend 1992 - 2013, downward trend 2014-2019
+<br />
+ACF - strong dependence structure up to and possibly beyond lag 25,  but no clear indication of seasonality
+<br />
+PACF - shows that most partial ACF's are insignificant
+<br />
+Lowess indicated a general downward trend; kernel and lowess smoothers indicate some syclical patterns
+```{r}
+png('ncs_plot.png')
+plot(ncs_train)
+dev.off()
+png('ncs_acf.png')
+ncs_acf = acf(ncs_train)
+plot(ncs_acf)
+dev.off()
+png('ncs_pacf.png')
+ncs_pacf = pacf(ncs_train)
+plot(ncs_pacf)
+dev.off()
+
+#moving average
+png('ncs_mov_ave.png')
+mov_ave = stats::filter(ncs_train, sides = 2, filter =rep(1/12,12))
+mov_ave2 = stats::filter(ncs_train, sides = 2, filter =rep(1/5,5))
+plot(ncs_train, main="Moving Average")
+lines(mov_ave, lwd=2, lty=2,col=2)
+lines(mov_ave2, lwd=2, col=4)
+dev.off()
+
+#kernel smoothing
+png('ncs_ksmooth.png')
+plot(ncs_train,main="Kernel Smoothing")
+lines(ksmooth(time(ncs_train), ncs_train, "normal", bandwidth=2), lwd=2, lty=2,col=2)
+lines(ksmooth(time(ncs_train), ncs_train, "normal", bandwidth=5/12), lwd=2, col=4)
+dev.off()
+
+#Lowess
+png('ncs_lowess.png')
+plot(ncs_train, main="Lowess")
+lines(lowess(ncs_train, f=.05), lwd=2, col=4)
+lines(lowess(ncs_train), lwd=2, lty=2,col=2)
+dev.off()
+
+#Smoothing splines
+png('ncs_smooth_spline.png')
+plot(ncs_train, main="Smoothing Splines")
+lines(smooth.spline(ncs_train, spar=0.5), lwd=2, col=4)
+lines(smooth.spline(ncs_train, spar=1), lty=2,  lwd=2, col=2)
+dev.off()
+```
+
+# Decomposition of Each Time Series
+
+## Used Cars Sales
+Additive - the random part is growing, indication that multiplicative is an appropriate model
+```{r}
+png('ucs_decomp_add.png')
+plot(add<-decompose(ucs_train))
+dev.off()
+png('ucs_decomp_mult.png')
+plot(mult<-decompose(ucs_train, type="mult"))
+dev.off()
+```
+
+## Public Transportation
+Additive - the random part is growing, indication that multiplicative is an appropriate model
+```{r}
+png('pt_decomp_add.png')
+plot(add<-decompose(pt_train))
+dev.off()
+png('pt_decomp_mult.png')
+plot(mult<-decompose(pt_train, type="mult"))
+dev.off()
+```
+
+## Steel
+Additive - the random part is growing, indication that multiplicative is an appropriate model
+```{r}
+png('steel_decomp_add.png')
+plot(add<-decompose(steel_train))
+dev.off()
+png('steel_decomp_mult.png')
+plot(mult<-decompose(steel_train, type="mult"))
+dev.off()
+```
+
+## New Car Sales
+Additive - the random part is growing, indication that multiplicative is an appropriate model
+```{r}
+png('ncs_decomp_add.png')
+plot(add<-decompose(ncs_train))
+dev.off()
+png('ncs_decomp_mult.png')
+plot(mult<-decompose(ncs_train, type="mult"))
+dev.off()
+```
+
+## Detrend and Deaseasonalize Data Decomposition Method 
+Multiplicative
+<br />
+Looks more stationary
+```{r}
+png('ucs_det_des_decomp_plot.png')
+plot(ucs_train)
+dev.off()
+
+png('ucs_det_des_decomp_station.png')
+decompose_used_car_sales_mult = decompose(ucs_train, "multiplicative")
+plot(decompose_used_car_sales_mult$random, main = "Deseasonalized and Detrended Used Car Sales")
+dev.off()
+seas_trend_adjust_used_car_sales = decompose_used_car_sales_mult$random
+seas_trend_adjust_used_car_sales = na.omit(seas_trend_adjust_used_car_sales)
+png('ucs_det_des_decomp_acf.png')
+ucs_det_des_decomp_acf = acf(seas_trend_adjust_used_car_sales)
+plot(ucs_det_des_decomp_acf, main='')
+dev.off()
+png('ucs_det_des_decomp_pacf.png')
+ucs_det_des_decomp_pacf = pacf(seas_trend_adjust_used_car_sales)
+plot(ucs_det_des_decomp_pacf, main='')
+dev.off()
+```
+
+## Detrend and Deseasonalize Data Moving Average 
+Does not appear to detrend and deseasonalize data well - log and differencing methods are superior
+```{r}
+
+mov_ave_used_cars = stats::filter(ucs_train, sides = 2, filter =rep(1/12,12))
+mov_ave2_used_cars = stats::filter(ucs_train, sides = 2, filter =rep(1/5,5))
+trend_seasonality_used_car = mov_ave2_used_cars
+
+png('ucs_det_des_move_ave_plot.png')
+plot(ucs_train)
+lines(mov_ave_used_cars)
+detrend_deseason_air = ucs_train/trend_seasonality_used_car
+png('ucs_det_des_move_ave.png')
+plot(as.ts(detrend_deseason_air))
+detrend_deseason_air = na.omit(detrend_deseason_air)
+dev.off()
+png('ucs_det_des_move_ave_acf.png')
+acf(detrend_deseason_air)
+dev.off()
+png('ucs_det_des_move_ave_pacf.png')
+pacf(detrend_deseason_air)
+dev.off()
+
+```
+
+## Detrend and Deaseasonalize Data using Log and Differencing Methods
+The used car sales has increasing trend and multiplicative seasonality:
+<br />
+Log transformed data stabilizes variance
+<br />
+Differencing helps with trend
+<br />
+Differencing at lag 12 removes seasonality (observed from ACF)
+<br />
+<br />
+Plot of transformed data looks more stationary with log and differencing methods. We can now fit the model.
+<br />
+Looking at ACF and PACF plots, we need to fit Seasonal ARIMA model.
+<br />
+Since the ACF is cutting off at a lag 1 with s =12 and PACF is tailing off at lags 1,2,3, and 4. These suggest an SMA(1), P=0, and Q=1 with s=12.
+<br />
+We can observe that there is no AR part therefore, we need to fit the following model:
+<br />
+SARIMA(0,1,1)x(0,1,1)_12 on the logged data
+```{r}
+lucs = log(ucs_train) #stabilizes variance
+ducs_log = diff(lucs) #removes trend
+png('ucs_det_des_log_diff_acf.png')
+acf(ducs_log) #still seasonality present at lag 12
+dev.off()
+dducs_log = diff(ducs_log, 12) #removes seasonality
+png('ucs_det_des_log_steps_to_stationary.png')
+plot.ts(cbind(ucs_train,lucs,ducs_log,dducs_log ))
+dev.off()
+png('ucs_det_des_log_diff_diff_acf.png')
+acf(dducs_log)
+dev.off()
+png('ucs_det_des_log_diff_diff_pacf.png')
+pacf(dducs_log)
+dev.off()
+kpss.test(dducs_log)
+```
+
+## Detrend and Deaseasonalize Data using Non Log and Differencing Methods
+```{r}
+ducs = diff(ucs_train) #removes trend
+png('ucs_det_des_nonlog_diff_acf.png')
+acf(ducs) #still seasonality present at lag 12
+dev.off()
+dducs = diff(ducs, 12) #removes seasonality
+png('ucs_det_des_nonlog_steps_to_stationary.png')
+plot.ts(cbind(ucs_train,ducs,dducs))
+dev.off()
+png('ucs_det_des_nonlog_diff_diff_acf.png')
+acf(dducs)
+dev.off()
+png('ucs_det_des_nonlog_diff_diff_pacf.png')
+pacf(dducs)
+dev.off()
+
+adf.test(dducs)
+kpss.test(dducs)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Model selection without predictors
+```{r}
+p_values <- c(0:2)
+q_values <- c(0:2)
+P_values <- c(0:2)
+Q_values <- c(0:2)
+grid <- expand.grid(p_values, q_values, P_values, Q_values)
+
+M <- matrix(0, ncol=9, nrow=nrow(grid))
+M[,1] <- grid$Var1
+M[,2] <- 1
+M[,3] <- grid$Var2
+M[,4] <- grid$Var3
+M[,5] <- 1
+M[,6] <- grid$Var4
+
+best.sarima <- function(x, M){
+  n <- length(x)
+  for (i in (1:nrow(M))){
+    p <- M[i,1]
+    d <- M[i,2]
+    q <- M[i,3]
+    P <- M[i,4]
+    D <- M[i,5]
+    Q <- M[i,6]
+   
+    fit <- arima(x, order = c(p,d,q), seas = list(order = c(P,D,Q),12), method = "CSS")
+    M[i,7] <- -2*fit$loglik + 2*length(fit$coef)
+    M[i,8] <- -2*fit$loglik + length(fit$coef)*log(n)
+    M[i,9] <- fit$sigma2
+    #M[i,10] <- round(Box.test(fit$residuals, type = "Ljung-Box", lag = 24)$p.value, 4)
+  }
+
+  M <- as.data.frame(M)
+  colnames(M) <- c("p", "d", "q", "P", "D", "Q", "aic", "bic", "sigma_sq")
+  #M$ljung_box <- ifelse(M$ljung_box ==0 , "<0.0001", M$ljung_box)
+  return(M)
+}
+
+results <- best.sarima(ucs_train, M)
+results$rank_aic <- rank(results$aic)
+results$rank_bic <- rank(results$bic)
+results$rank_sigma_sq <- rank(results$sigma_sq)
+results <- results %>% arrange(rank_aic)
+head(results)
+
+library(knitr)
+kable(head(results), caption = "Model selection", col.names = c('p', 'd', 'q', 'P', 'D', 'Q', 'AIC', 'BIC', 'Sigma Sq.', 'AIC Rank', 'BIC Rank', 'Sigma Sq. Rank'), align = rep('c', 13))
+
+```
+
+
+## Candidate models
+```{r}
+png('0_1_1_residuals_acf.png')
+fit1 <- arima(ucs_train, order=c(0,1,1),
+seas=list(order=c(0,1,1),12), method="CSS")
+acf(fit1$residuals)
+dev.off()
+
+png('0_1_2_residuals_acf.png')
+fit2 <- arima(ucs_train, order=c(0,1,2),
+seas=list(order=c(0,1,1),12), method="CSS")
+acf(fit2$residuals)
+dev.off()
+
+s1 <- sqrt(diag(fit1$var.coef))
+t_value1= fit1$coef/s1
+p_val1=pt(abs(t_value1), df=319 ,lower.tail=FALSE)
+p_val1
+
+```
+
+
+
+## Pairwise plots and CCF
+```{r}
+png('pairwise_plot.png')
+pairs(cbind(UsedCarSales=ucs_train, PublicTransportation= pt_train, Steel = steel_train, NewCarSales = ncs_train))
+dev.off()
+
+png('ucs_pt_ccf.png')
+ccf(ucs_train, pt_train, main = "Used Car Sales vs. Public Transportation", ylab = "CCF")
+dev.off()
+png('ucs_steel_ccf.png')
+ccf(ucs_train, steel_train, main = "Used Car Sales vs. Steel", ylab = "CCF")
+dev.off()
+png('ucs_ncs_ccf.png')
+ccf(ucs_train, ncs_train, main = "Used Car Sales vs. New Car Sales", ylab = "CCF")
+dev.off()
+```
+
+
+
+## Check residuals of each model against differenced and deceasonalized explanatory variables
+```{r}
+pt_diff <- arima(pt_train, order =c(0,1,0),seas =list(order =c(0,1,0),12), method = "CSS")
+png('pt_diff_resids')
+plot(residuals(pt_diff), ylab="Residuals", main="PT Diff Residuals")
+dev.off()
+
+png('pt_diff_acf')
+acf(residuals(pt_diff), lag=50, main="PT Diff Residuals")
+dev.off()
+
+png('pt_diff_pacf')
+pacf(residuals(pt_diff), lag=50, main="PT Diff Residuals")
+dev.off()
+
+png('pt_diff_QQnorm')
+qqnorm(residuals(pt_diff))
+dev.off()
+
+pt_res <- residuals(pt_diff)
+
+
+steel_diff <- arima(steel_train, order =c(0,1,0),seas =list(order =c(0,1,0),12), method = "CSS")
+png('steel_diff_resids')
+plot(residuals(steel_diff), ylab="Residuals", main="Steel Diff Residuals")
+dev.off()
+
+png('steel_diff_acf')
+acf(residuals(steel_diff), lag=50, main="Steel Diff Residuals")
+dev.off()
+
+png('steel_diff_pacf')
+pacf(residuals(steel_diff), lag=50, main="Steel Diff Residuals")
+dev.off()
+
+png('steel_diff_QQnorm')
+qqnorm(residuals(steel_diff))
+dev.off()
+
+steel_res <- residuals(steel_diff)
+
+
+ncs_diff <- arima(ncs_train, order =c(0,1,0),seas =list(order =c(0,1,0),12), method = "CSS")
+
+png('ncs_diff_resids')
+plot(residuals(ncs_diff), ylab="Residuals", main="NCS Diff Residuals")
+dev.off()
+
+png('ncs_diff_acf')
+acf(residuals(ncs_diff), lag=50, main="NCS Diff Residuals")
+dev.off()
+
+png('ncs_diff_pacf')
+pacf(residuals(ncs_diff), lag=50, main="NCS Diff Residuals")
+dev.off()
+
+png('ncs_diff_QQnorm')
+qqnorm(residuals(ncs_diff))
+dev.off()
+
+ncs_res <- residuals(ncs_diff)
+
+
+main1 <- arima(ucs_train, order =c(0,1,1),seas =list(order =c(0,1,1),12), method = "CSS")
+main1_res <- residuals(main1)
+
+main2 <- arima(ucs_train, order=c(0,1,2),seas =list(order =c(0,1,0),12), method = "CSS")
+main2_res <- residuals(main2)
+
+rAll <- cbind(main1_res, main2_res, pt_res, ncs_res, steel_res)
+png('residuals_pairwise.png')
+pairs(rAll)
+dev.off()
+```
+
+## Candidate models with expanatory variables passed Ljung-Box test
+Not that different consider (0,1,1)(0,1,1)_12 for simplicity
+```{r}
+png('0_1_1_residuals_with_explanatory_acf.png')
+fit1_2 <- arima(ucs_train, order=c(0,1,1),
+seas=list(order=c(0,1,1),12), xreg=cbind(pt_train,steel_train,ncs_train), method="CSS")
+Box.test(residuals(fit1_2), type="Ljung-Box", lag=24)
+acf(fit1_2$residuals)
+dev.off()
+
+png('0_1_2_residuals_with_explanatory_acf.png')
+fit2_2 <- arima(ucs_train, order=c(0,1,2),
+seas=list(order=c(0,1,1),12), xreg=cbind(pt_train,steel_train,ncs_train), method="CSS")
+Box.test(residuals(fit2_2), type="Ljung-Box", lag=24)
+acf(fit2_2$residuals)
+dev.off()
+acf(fit1_2$residuals)
+```
+
+## Adequate models of (0,1,1)(0,1,1)_12 and (0,1,13)(0,1,1)_12 and expanatory variables passed Ljung-Box test
+```{r}
+fit1_2 <- arima(ucs_train, order=c(0,1,1),
+seas=list(order=c(0,1,1),12), xreg=cbind(pt_train,steel_train,ncs_train), method="CSS")
+Box.test(residuals(fit1_2), type="Ljung-Box", lag=24)
+
+png('0_1_1_residuals_explor_plot_acf_hist_qq.png')
+par(mfrow=c(2,2))
+plot(fit1_2$residuals)
+
+acf(fit1_2$residuals)
+
+h1=hist(fit1_2$residuals)
+xfit1<-seq(min(fit1_2$residuals),max(fit1_2$residuals),length=2500)
+yfit1<-dnorm(xfit1,mean=mean(fit1_2$residuals),sd=sd(fit1_2$residuals))
+yfit1 <- yfit1*diff(h1$mids[1:2])*length(fit1_2$residuals)
+lines(xfit1, yfit1, col="blue", lwd=2)
+qqnorm(fit1_2$residuals)
+dev.off()
+
+aic1_2 = -2*fit1_2$loglik + 2*length(fit1_2$coef)
+bic1_2 = -2*fit1_2$loglik + (log(length(ucs_train)) + 1) *length(fit1_2$coef)
+
+fit1_2_13 <- arima(ucs_train, order=c(0,1,13),
+seas=list(order=c(0,1,1),12), xreg=cbind(pt_train,steel_train,ncs_train), method="CSS")
+Box.test(residuals(fit1_2_13), type="Ljung-Box", lag=24)
+
+png('0_1_13_residuals_explor_plot_acf_hist_qq.png')
+par(mfrow=c(2,2))
+plot(fit1_2_13$residuals)
+
+acf(fit1_2_13$residuals)
+
+h2=hist(fit1_2_13$residuals)
+xfit2<-seq(min(fit1_2_13$residuals),max(fit1_2_13$residuals),length=2500)
+yfit2<-dnorm(xfit2,mean=mean(fit1_2_13$residuals),sd=sd(fit1_2_13$residuals))
+yfit2 <- yfit2*diff(h2$mids[1:2])*length(fit1_2_13$residuals)
+lines(xfit2, yfit2, col="blue", lwd=2)
+
+qqnorm(fit1_2_13$residuals)
+dev.off()
+
+aic1_2_13 = -2*fit1_2_13$loglik + 2*length(fit1_2_13$coef)
+bic1_2_13 = -2*fit1_2_13$loglik + (log(length(ucs_train)) + 1) *length(fit1_2_13$coef)
+
+aic1_2
+bic1_2
+aic1_2_13
+bic1_2_13
+```
+
+## Final best two models
+```{r}
+fit1_2
+fit1_2_13
+s <- sqrt(diag(fit1_2$var.coef))
+t_value= fit1_2$coef/s
+p_val1=pt(abs(t_value), df=316 ,lower.tail=FALSE)
+p_val1 # for fit (0,1,1)(0,1,1)_12 -> public transportation not significant
+
+s13 <- sqrt(diag(fit1_2_13$var.coef))
+t_value13= fit1_2_13$coef/s13
+p_val13=pt(abs(t_value13), df=308 ,lower.tail=FALSE)
+p_val13 
+
+model1_2 <- cbind(fit1_2$coef, p_val1)
+kable(model1_2, col.names = c("coeff", "p-value"))
+
+model1_2_13 <- cbind(fit1_2_13$coef, p_val13)
+kable(model1_2_13, col.names = c("coeff", "p-value"))
+
+```
+
+## Model without public transportation
+```{r}
+fit1_2_no_pt <- arima(ucs_train, order=c(0,1,1),
+seas=list(order=c(0,1,1),12), xreg=cbind(steel_train,ncs_train), method="CSS")
+Box.test(residuals(fit1_2_no_pt), type="Ljung-Box", lag=24)
+acf(fit1_2_no_pt$residuals)
+h = hist(fit1_2_no_pt$residuals)
+xfit<-seq(min(fit1_2_no_pt$residuals),max(fit1_2_no_pt$residuals),length=2500)
+yfit<-dnorm(xfit,mean=mean(fit1_2_no_pt$residuals),sd=sd(fit1_2_no_pt$residuals))
+yfit <- yfit*diff(h$mids[1:2])*length(fit1_2_no_pt$residuals)
+lines(xfit, yfit, col="blue", lwd=2)
+qqnorm(fit1_2_no_pt$residuals)
+```
+
+## Test without Public transportation
+Conclusion public transportation influences steel. Conclusion keep public transportation. 
+```{r}
+s13_no_pt <- sqrt(diag(fit1_2_no_pt$var.coef))
+t_value13_no_pt= fit1_2_no_pt$coef/s13_no_pt
+p_val13_no_pt=pt(abs(t_value13_no_pt), df=317 ,lower.tail=FALSE)
+p_val13_no_pt 
+
+model1_2_no_pt<- cbind(fit1_2_no_pt$coef, p_val13_no_pt)
+kable(model1_2_no_pt, col.names = c("coeff", "p-value"))
+```
+
+## Forecasting with two models
+```{r}
+#fit1_2
+#fit1_2_13
+#(0,1,1)(0,1,1)_12
+
+
+sarima_predict_1 = predict(fit1_2, n.ahead=12, newxreg=cbind(pt_test, steel_test, ncs_test)) 
+conf_upper1 = sarima_predict_1$pred + 1.96*sarima_predict_1$se
+conf_lower1 = sarima_predict_1$pred - 1.96*sarima_predict_1$se
+png('0_1_1_explor_pred.png')
+ts.plot(ucs_train,sarima_predict_1$pred, col=c("black","red"), xlim=c(2015, 2020), main="SARIMA(0,1,1)(0,1,1)_12")
+legend("bottomright", legend=c("Forecasted", "Actual", "Confidence Interval"),
+       col=c("red", "blue", "green"), lty=1, cex=0.8)
+lines(conf_upper1, col="green")
+lines(conf_lower1, col="green")
+lines(ucs_test, col="blue")
+dev.off()
+mse_1 = mean((ucs_test-sarima_predict_1$pred)^2)
+mse_1
+
+sarima_predict_13 = predict(fit1_2_13, n.ahead=12, newxreg=cbind(pt_test, steel_test, ncs_test)) 
+conf_upper13 = sarima_predict_13$pred + 1.96*sarima_predict_13$se
+conf_lower13 = sarima_predict_13$pred - 1.96*sarima_predict_13$se
+
+png('0_1_13_explor_pred.png')
+ts.plot(ucs_train,sarima_predict_13$pred, col=c("black","red"), xlim=c(2015, 2020),main="SARIMA(0,1,13)(0,1,1)_12")
+legend("bottomright", legend=c("Forecasted", "Actual", "Confidence Interval"),
+       col=c("red", "blue", "green"), lty=1, cex=0.8)
+lines(conf_upper13, col="green")
+lines(conf_lower13, col="green")
+lines(ucs_test, col="blue")
+dev.off()
+mse_2 = mean((ucs_test-sarima_predict_13$pred)^2)
+mse_2
+
+mae_1 = mean(abs(sarima_predict_1$pred-ucs_test))
+mae_2= mean(abs(sarima_predict_13$pred-ucs_test))
+mae_1
+mae_2
+
+```
+
+
+```{r table-simple, echo=FALSE, message=FALSE, warnings=FALSE, results='asis'}
+library(pander)
+require(pander)
+#panderOptions('table.split.table', Inf)
+#set.caption("My great data")
+my.data <- " 
+  Model           | Ljung-Box p-val |MSE   |MAE    
+  (0,1,1)(0,1,1)_12  |0.2572           | 124,976.4 |276.9427
+  (0,1,13)(0,1,1)_12 |0.9591           | 131,151  | 274.6988"
+
+df <- read.delim(textConnection(my.data),header=FALSE,sep="|",strip.white=TRUE,stringsAsFactors=FALSE)
+names(df) <- unname(as.list(df[1,])) # put headers on
+df <- df[-1,] # remove first row
+row.names(df)<-NULL
+pander(df, style = 'rmarkdown')
+
+my.data2 <- " 
+#| Test Name          | Hypothesis Statement |p-val   |Conclusion    
+1|KPSS  |$$H_0$$: log transformed data is stationary| 0.1|at 0.05 fail to 
+|      |$$H_1$$: log transformed data is not stationary|    |reject the Null
+2|KPSS  |$$H_0$$: non log transformed data is stationary| 0.1|at 0.05 fail to  
+|      |$$H_1$$: non log transformed  data is not stationary|    |reject the Null
+2| Ljung-Box|$$H_0$$: (0,1,1)(0,1,1)_12 errors are uncorr.| 0.26|at 0.05  fail to  
+|          |$$H_1$$: (0,1,1)(0,1,1)_12 errors are corr. |       |reject the Null
+3| Ljung-Box|$$H_0$$: (0,1,13)(0,1,1)_12 errors are uncorr.| 0.96|at 0.05 fail to
+|          |$$H_1$$: (0,1,13)(0,1,1)_12 errors are corr.|       |reject the Null"
+
+df2 <- read.delim(textConnection(my.data2),header=FALSE,sep="|",strip.white=TRUE,stringsAsFactors=FALSE)
+names(df2) <- unname(as.list(df2[1,])) # put headers on
+df2 <- df2[-1,] # remove first row
+row.names(df2)<-NULL
+panderOptions("table.split.table", Inf) 
+pander(df2, style = 'rmarkdown')
+
+```
+
